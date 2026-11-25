@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>DLP Веб-чат</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            max-width: 820px;
+            margin: 32px auto;
+            padding: 0 16px;
+            background: #f6f7f9;
+            color: #18181b;
+        }
+
+        .card {
+            background: #fff;
+            border: 1px solid #e4e4e7;
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 110px;
+            box-sizing: border-box;
+            padding: 10px 12px;
+            font-size: 15px;
+            font-family: inherit;
+            border: 1px solid #d4d4d8;
+            border-radius: 8px;
+            resize: vertical;
+        }
+
+        .actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+            flex-wrap: wrap;
+        }
+
+        button {
+            padding: 9px 16px;
+            font-size: 14px;
+            font-weight: 600;
+            border-radius: 8px;
+            border: 1px solid #d4d4d8;
+            background: #fff;
+            cursor: pointer;
+        }
+
+        button.primary {
+            background: #2563eb;
+            border-color: #2563eb;
+            color: #fff;
+        }
+
+        button.secondary {
+            background: #f4f4f5;
+        }
+
+        button:hover {
+            opacity: 0.92;
+        }
+
+        mark {
+            padding: 1px 4px;
+            border-radius: 4px;
+            background: #fde047;
+        }
+
+        mark.high {
+            background: #fecaca;
+            border-bottom: 2px solid #dc2626;
+        }
+
+        mark.medium {
+            background: #fed7aa;
+            border-bottom: 2px solid #ea580c;
+        }
+
+        .preview-box {
+            white-space: pre-wrap;
+            background: #fafafa;
+            border: 1px dashed #d4d4d8;
+            border-radius: 8px;
+            padding: 10px 12px;
+            margin-top: 8px;
+            line-height: 1.5;
+        }
+
+        .match-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            padding: 8px 10px;
+            border: 1px solid #e4e4e7;
+            border-radius: 8px;
+            margin-top: 8px;
+            font-size: 14px;
+        }
+
+        .badge {
+            font-size: 12px;
+            padding: 2px 8px;
+            border-radius: 999px;
+            background: #e4e4e7;
+            font-weight: 600;
+        }
+
+        .badge.high {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .badge.medium {
+            background: #ffedd5;
+            color: #9a3412;
+        }
+
+        .msg {
+            padding: 10px 12px;
+            border-radius: 8px;
+            margin-top: 8px;
+            white-space: pre-wrap;
+            font-size: 14px;
+        }
+
+        .msg.user {
+            background: #eff6ff;
+        }
+
+        .msg.assistant {
+            background: #f4f4f5;
+        }
+
+        .msg.blocked {
+            background: #fef2f2;
+            border: 1px solid #fecaca;
+            color: #991b1b;
+        }
+    </style>
+</head>
+<body>
+<h2>DLP-фильтр и веб-чат</h2>
+
+<div class="card">
+    <label for="promptInput"><strong>Введите сообщение / промпт:</strong></label>
+    <textarea id="promptInput"
+              placeholder="Например: Скинь отчёт по проекту Проект Аврора, почта test@example.com"></textarea>
+
+    <div class="actions">
+        <button id="checkBtn" class="primary" type="button">Проверить текст</button>
+        <button id="maskAllBtn" class="secondary" type="button">Подставить замаскированный текст</button>
+        <button id="sendBtn" type="button">Отправить в чат</button>
+    </div>
+
+    <div id="dlpResult" style="display:none; margin-top: 14px;">
+        <div><strong>Подсветка совпадений:</strong></div>
+        <div id="highlightedText" class="preview-box"></div>
+
+        <div style="margin-top: 10px;"><strong>Предпросмотр после маскировки:</strong></div>
+        <div id="redactedText" class="preview-box"></div>
+
+        <div id="matchesList" style="margin-top: 10px;"></div>
+    </div>
+</div>
+
+<div class="card">
+    <strong>История чата:</strong>
+    <div id="chatLog"></div>
+</div>
+
+<script>
+    const promptInput = document.getElementById("promptInput");
+    const checkBtn = document.getElementById("checkBtn");
+    const maskAllBtn = document.getElementById("maskAllBtn");
+    const sendBtn = document.getElementById("sendBtn");
+    const dlpResult = document.getElementById("dlpResult");
+    const highlightedText = document.getElementById("highlightedText");
+    const redactedText = document.getElementById("redactedText");
+    const matchesList = document.getElementById("matchesList");
+    const chatLog = document.getElementById("chatLog");
+
+    let lastCheckData = null;
+    const ignoredIds = new Set();
+
+    function escapeHtml(str) {
+        return str
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;");
+    }
+
+    function buildHighlightedHtml(text, matches) {
+        if (!matches.length) return escapeHtml(text);
+        let out = "";
+        let cursor = 0;
+        for (const m of matches) {
+            out += escapeHtml(text.slice(cursor, m.start));
+            const cls = m.ignored ? "" : m.severity;
+            const title = `${m.label} (${m.severity})${m.ignored ? " [игнорируется]" : ""}`;
+            out += `<mark class="${cls}" title="${escapeHtml(title)}">${escapeHtml(text.slice(m.start, m.end))}</mark>`;
+            cursor = m.end;
+        }
+        out += escapeHtml(text.slice(cursor));
+        return out;
+    }
+
+    function renderMatches(matches) {
+        matchesList.innerHTML = "";
+        if (!matches.length) {
+            matchesList.innerHTML = `<div style="color:#15803d;">Совпадений не найдено.</div>`;
+            return;
+        }
+        for (const m of matches) {
+            const row = document.createElement("div");
+            row.className = "match-item";
+
+            const isIgnored = ignoredIds.has(m.match_id);
+            row.innerHTML = `
+          <div>
+            <span class="badge ${m.severity}">${m.severity.toUpperCase()}</span>
+            <strong>${escapeHtml(m.label)}</strong>:
+            <code>${escapeHtml(m.value)}</code> → <code>${escapeHtml(m.mask)}</code>
+          </div>
+        `;
+
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.textContent = isIgnored ? "Учитывать снова" : "Игнорировать";
+            btn.onclick = async () => {
+                if (isIgnored) ignoredIds.delete(m.match_id);
+                else ignoredIds.add(m.match_id);
+                await runCheck();
+            };
+            row.appendChild(btn);
+            matchesList.appendChild(row);
+        }
+    }
+
+    async function runCheck() {
+        const text = promptInput.value;
+        if (!text.trim()) return;
+
+        const res = await fetch("/api/dlp/check", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                text,
+                ignored_match_ids: Array.from(ignoredIds),
+                numbered_placeholders: true,
+            }),
+        });
+        const data = await res.json();
+        lastCheckData = data;
+
+        dlpResult.style.display = "block";
+        highlightedText.innerHTML = buildHighlightedHtml(text, data.matches);
+        redactedText.textContent = data.redacted_text;
+        renderMatches(data.matches);
+        return data;
+    }
+
+    function appendMessage(role, text) {
+        const div = document.createElement("div");
+        div.className = `msg ${role}`;
+        div.textContent = text;
+        chatLog.appendChild(div);
+    }
+
+    checkBtn.addEventListener("click", runCheck);
+
+    maskAllBtn.addEventListener("click", async () => {
+        const data = lastCheckData || (await runCheck());
+        if (data && data.redacted_text) {
+            promptInput.value = data.redacted_text;
+            ignoredIds.clear();
+            await runCheck();
+        }
+    });
+
+    sendBtn.addEventListener("click", async () => {
+        const message = promptInput.value;
+        if (!message.trim()) return;
+
+        const checkData = await runCheck();
+        const hasHigh = checkData?.has_unhandled_high_risk || false;
+
+        const res = await fetch("/api/chat", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                message,
+                ignored_match_ids: Array.from(ignoredIds),
+                allow_high_risk_override: hasHigh,
+            }),
+        });
+        const data = await res.json();
+
+        if (data.status === "blocked") {
+            appendMessage("blocked", `Заблокировано: ${data.reason}`);
+        } else {
+            appendMessage("user", `Отправлено в LLM: ${data.sent_prompt}`);
+            appendMessage("assistant", data.reply);
+        }
+    });
+</script>
+</body>
+</html>

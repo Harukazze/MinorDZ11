@@ -10,6 +10,11 @@ from pydantic import BaseModel, Field
 
 from dlp_filter import DlpMatch, RegexDlpFilter
 
+from pathlib import Path
+from fastapi.responses import FileResponse
+
+BASE_DIR = Path(__file__).resolve().parent
+
 app = FastAPI(title="Minimal DLP Chat API", version="0.1.0")
 
 # Разрешаем локальный фронтенд (при необходимости сузьте allow_origins)
@@ -71,7 +76,7 @@ class ChatResponse(BaseModel):
 
 
 def _serialize_matches(
-    matches: list[DlpMatch], ignored_ids: set[str]
+        matches: list[DlpMatch], ignored_ids: set[str]
 ) -> list[DlpMatchOut]:
     return [
         DlpMatchOut(
@@ -183,3 +188,7 @@ async def send_chat_message(req: ChatRequest) -> ChatResponse:
         sent_prompt=redacted_text,
         matches=_serialize_matches(matches, ignored_set),
     )
+
+@app.get("/")
+def index() -> FileResponse:
+    return FileResponse(BASE_DIR / "index.html")
